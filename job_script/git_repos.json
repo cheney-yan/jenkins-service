@@ -1,0 +1,20 @@
+[
+  {
+    "name": "jenkins-sample-proj1",
+    "jenkins_branches": [
+      "jenkins_v1"
+    ]
+  },
+  {
+    "name": "jenkins-sample-proj2",
+    "jenkins_branches": [
+      "jenkins_v1"
+    ]
+  },
+  {
+    "name": "jenkins-sample-proj3",
+    "jenkins_branches": [
+      "jenkins_v1"
+    ]
+  }
+]

@@ -1,0 +1,368 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Jenkins stack template.
+Parameters:
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t2.medium
+    AllowedValues:
+      - t1.micro
+      - t2.nano
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+      - m1.small
+      - m1.medium
+      - m1.large
+      - m1.xlarge
+      - m2.xlarge
+      - m2.2xlarge
+      - m2.4xlarge
+      - m3.medium
+      - m3.large
+      - m3.xlarge
+      - m3.2xlarge
+      - m4.large
+      - m4.xlarge
+      - m4.2xlarge
+      - m4.4xlarge
+      - m4.10xlarge
+      - c1.medium
+      - c1.xlarge
+      - c3.large
+      - c3.xlarge
+      - c3.2xlarge
+      - c3.4xlarge
+      - c3.8xlarge
+      - c4.large
+      - c4.xlarge
+      - c4.2xlarge
+      - c4.4xlarge
+      - c4.8xlarge
+      - g2.2xlarge
+      - g2.8xlarge
+      - r3.large
+      - r3.xlarge
+      - r3.2xlarge
+      - r3.4xlarge
+      - r3.8xlarge
+      - i2.xlarge
+      - i2.2xlarge
+      - i2.4xlarge
+      - i2.8xlarge
+      - d2.xlarge
+      - d2.2xlarge
+      - d2.4xlarge
+      - d2.8xlarge
+      - hi1.4xlarge
+      - hs1.8xlarge
+      - cr1.8xlarge
+      - cc2.8xlarge
+      - cg1.4xlarge
+    ConstraintDescription: must be a valid EC2 instance type.
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  ImageId:
+    Description: The image id to use.
+    Type: String
+  VpcId:
+    Type: String
+    Description: VpcId of the vpc we are launching these load balancers in.
+  Subnets:
+    Description: The subnets that ELB and instances lives.
+    Type: CommaDelimitedList
+  AlarmEmail:
+    Description: The alarm email
+    Type: String
+  ServerIamInstanceProfile:
+    Description: The server instance profile for jenkins
+    Type: String
+Resources:
+  WebServerGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchConfigurationName: !Ref 'LaunchConfig'
+      MinSize: '1'
+      MaxSize: '2'
+      LoadBalancerNames:
+        - !Ref 'ElasticLoadBalancer'
+      VPCZoneIdentifier: !Ref 'Subnets'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-instance'
+          PropagateAtLaunch: 'true'
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: '0'
+        MaxBatchSize: '1'
+        PauseTime: PT30M
+        WaitOnResourceSignals: 'true'
+      AutoScalingReplacingUpdate:
+        WillReplace: 'true'
+  ConfigBackupBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      BucketName: jenkins-config-backup-{{ name }}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              KMSMasterKeyID: arn:aws:kms:us-east-1:790966503942:alias/key-jenkins-config-backup-us-east-1
+              SSEAlgorithm: aws:kms
+      Tags: []
+  ConfigBackupBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ConfigBackupBucket
+      PolicyDocument:
+        Statement:
+          - Sid: DenyUnEncryptedObjectUploads
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:PutObject
+            Resource: arn:aws:s3:::jenkins-config-backup-{{ name }}/*
+            Condition:
+              StringNotEquals:
+                "s3:x-amz-server-side-encryption": "aws:kms"
+  JenkinsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 60
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    DependsOn:
+      - InstanceSecurityGroup
+    Metadata:
+      Comment: Recover from config backup and install jenkins
+      AWS::CloudFormation::Init:
+        configSets:
+          InstallationSet:
+            - "jenkins_backup_scripts"
+            - "prepare_yum_repo"
+            - "install_jenkins"
+            - "enable_swap"
+            - "cloudwatch_monitor"
+            - "jenkins_awslog_config"
+        enable_swap:
+          commands:
+            01_create_swap_file:
+              command: sudo fallocate -l 8G /.swapfile || true
+            02_change_permission:
+              command: sudo chmod 600 /.swapfile || true
+            03_make_file_as_swap:
+              command: sudo mkswap /.swapfile || true
+            04_turn_swap_on:
+              command: sudo swapon /.swapfile || true
+        cloudwatch_monitor:
+          commands:
+            01_install_cloudwatch_script:
+              command: sudo pip install cloudwatchmon pycli boto3
+            02_add_cron_job:
+              command: sudo crontab -l | { cat | grep -v /usr/local/bin/mon-put-instance-stats.py; echo '* * * * * /usr/local/bin/mon-put-instance-stats.py
+                --auto-scaling --mem-util --disk-space-util --disk-path=/ --loadavg
+                --swap-util --from-cron | logger 2>&1'; } | sudo crontab -
+        jenkins_backup_scripts:
+          files:
+            /home/ec2-user/backup_jenkins.sh:
+              content: !Sub |
+                 TIMESTAMP=$(date +%Y%m%d%H%M%S)
+                 sduo service jenkins stop || true
+                 aws s3 sync --sse 'aws:kms' --sse-kms-key-id alias/key-jenkins-config-backup-us-east-1 --include '*' --exclude 'workspace/*' --exclude '*.log' /var/lib/jenkins s3://${ConfigBackupBucket}/jenkins/${!TIMESTAMP}
+                 sudo service jenkins start || true
+            /home/ec2-user/restore_jenkins_as_root.sh:
+              content: !Sub |
+                 LATEST_PREFIX=$(aws s3 ls s3://${ConfigBackupBucket}/jenkins/ | awk '{print $NF}' | sort -r | head -n 1)
+                 echo service jenkins stop || true
+                 echo aws s3 sync s3://${ConfigBackupBucket}/jenkins/${!LATEST_PREFIX} /var/lib/jenkins/
+                 echo chown -R jenkins /var/lib/jenkins/
+                 echo chmod -R +x /var/lib/jenkins/
+                 service jenkins start || true
+          commands:
+            01_add_cron_job_for_auto_backup:
+              command: sudo crontab -l | { cat | grep -v /home/ec2-user/backup_jenkins.sh; echo '0 16 * * * bash /home/ec2-user/backup_jenkins.sh
+                2>&1 | logger'; } | sudo crontab -
+        prepare_yum_repo:
+          commands:
+            01_jenkins_repo:
+              command: curl -o /etc/yum.repos.d/jenkins.repo http://pkg.jenkins-ci.org/redhat/jenkins.repo
+            02_jenkins_repo_key_import:
+              command: rpm --import https://pkg.jenkins.io/redhat/jenkins.io.key
+        install_jenkins:
+          packages:
+            yum:
+              jenkins-2.104: []
+              git: []
+              sendmail: []
+              jq: []
+          services:
+            sysvinit:
+              jenkins:
+                enabled: 'true'
+                ensureRunning: 'true'
+          commands:
+            01_memory_setting_for_jenkins:
+              command: echo 'JENKINS_JAVA_OPTIONS="-Djava.awt.headless=true -Xmx4096m"' | sudo tee --append /etc/sysconfig/jenkins
+            02_restore_jenkins:
+              command: bash /home/ec2-user/restore_jenkins_as_root.sh || true
+            03_refresh_crond:
+              command: sudo service crond restart
+        jenkins_awslog_config:
+          files:
+            /etc/jenkins-awslogs.conf:
+              content: !Sub |
+                            [general]
+                            state_file= /var/awslogs/agent-state
+                            [/var/log/jenkins/jenkins.log]
+                            file = /var/log/jenkins/jenkins.log
+                            log_group_name = ${JenkinsLogGroup}
+                            log_stream_name = {instance_id}/jenkins.log
+                            datetime_format = %d/%b/%Y:%H:%M:%S
+              mode: '000400'
+              owner: jenkins
+              group: jenkins
+          commands:
+            01_download_install_script:
+              command: curl -o /tmp/awslogs-agent-setup.py https://s3.amazonaws.com/aws-cloudwatch/downloads/latest/awslogs-agent-setup.py
+            02_install_agent:
+              command: !Sub |
+                          python /tmp/awslogs-agent-setup.py -n -r ${AWS::Region} -c /etc/jenkins-awslogs.conf || error_exit 'Failed to run CloudWatchLogs agent setup'
+    Properties:
+      ImageId: !Ref 'ImageId'
+      AssociatePublicIpAddress: true
+      IamInstanceProfile: !Ref ServerIamInstanceProfile
+      SecurityGroups:
+        - !Ref 'InstanceSecurityGroup'
+      InstanceType: !Ref 'InstanceType'
+      KeyName: !Ref 'KeyName'
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: '120'
+            VolumeType: gp2
+      UserData: !Base64
+        Fn::Sub: |
+          #!/bin/bash -xe
+          yum update -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchConfig -c InstallationSet --region {{ region }}
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource WebServerGroup --region {{ region }}
+  InternalELBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow public accessing ELB
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref 'VpcId'
+  ElasticLoadBalancer:
+    DependsOn:
+      - InternalELBSG
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Properties:
+      SecurityGroups:
+        - !GetAtt 'InternalELBSG.GroupId'
+      Subnets: !Ref 'Subnets'
+      CrossZone: 'true'
+      Scheme: internet-facing 
+      Listeners:
+        - LoadBalancerPort: '80'
+          InstancePort: '8080'
+          Protocol: HTTP
+      HealthCheck:
+        Target: TCP:8080
+        HealthyThreshold: '2'
+        UnhealthyThreshold: '10'
+        Interval: '60'
+        Timeout: '5'
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn:
+      - InternalELBSG
+    Properties:
+      GroupDescription: Enable SSH access and HTTP access on the inbound port
+      VpcId: !Ref 'VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '8080'
+          ToPort: '8080'
+          SourceSecurityGroupOwnerId: !GetAtt 'ElasticLoadBalancer.SourceSecurityGroup.OwnerAlias'
+          SourceSecurityGroupId: !GetAtt 'InternalELBSG.GroupId'
+  AlarmNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !Ref 'AlarmEmail'
+          Protocol: email
+  DiskUsageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: The Disk Usage is higher than expected
+      MetricName: DiskSpaceUtilization
+      Namespace: System/Linux
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '2'
+      Threshold: '60'
+      AlarmActions:
+        - !Ref 'AlarmNotificationTopic'
+      OKActions:
+        - !Ref 'AlarmNotificationTopic'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref 'WebServerGroup'
+        - Name: Filesystem
+          Value: /dev/xvda1
+        - Name: MountPath
+          Value: /
+  CPUUsageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: The CPU Usage is higher than expected
+      MetricName: LoadAvg15Min
+      Namespace: System/Linux
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '2'
+      Threshold: '75'
+      AlarmActions:
+        - !Ref 'AlarmNotificationTopic'
+      OKActions:
+        - !Ref 'AlarmNotificationTopic'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref 'WebServerGroup'
+  MemoryUsageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: The CPU Usage is higher than expected
+      MetricName: MemoryUtilization
+      Namespace: System/Linux
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '2'
+      Threshold: '95'
+      AlarmActions:
+        - !Ref 'AlarmNotificationTopic'
+      OKActions:
+        - !Ref 'AlarmNotificationTopic'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref 'WebServerGroup'
+Outputs:
+  URL:
+    Description: URL of the website
+    Value: !Sub 'https://${ElasticLoadBalancer.DNSName}'
+  CloudWatchLogGroupName:
+    Description: The name of the CloudWatch log group
+    Value: !Ref 'JenkinsLogGroup'

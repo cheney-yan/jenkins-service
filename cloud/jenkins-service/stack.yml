@@ -1,0 +1,42 @@
+--- # Playbook to manage the Authentication Cloud Stack 
+- name: Provision Authentication Stack
+  hosts: localhost
+  connection: local
+  gather_facts: True
+  vars:
+    region: ap-southeast-2
+
+  tasks:
+    - name: Prepare running dir
+      local_action:
+        module: command mktemp -d "/tmp/jenkins.XXXX"
+      register: working_dir
+
+    - debug: msg="Generating cloudformation template at {{ working_dir.stdout }}/stack.yaml"
+
+    - name: Install customised cloudformation template
+      template: src=templates/template.yaml dest={{ working_dir.stdout }}/stack.yaml
+
+    - name: Launch stack cloudformation
+      cloudformation:
+        stack_name: "{{ name }}-jenkins"
+        state: "{{ stack_state | default('present') }}"
+        region: "{{ region }}"
+        disable_rollback: false
+        template: "{{ working_dir.stdout }}/stack.yaml"
+        template_parameters:
+          KeyName: "cheney-yan-sandbox"
+          AlarmEmail: "cheney.yan@domain.com.au"
+          ImageId: "ami-df49e9bd"
+          InstanceType: "t2.medium"
+          VpcId: "vpc-f99cd39e"
+          Subnets: "subnet-adb187ca,subnet-f6f1d2bf"
+          ServerIamInstanceProfile: arn:aws:iam::032345039960:instance-profile/jenkins/jenkins-base-1-jenkins-JenkinsInstanceProfile-EJBJPLEITG1N # this is genereated from base stack
+      register: stack
+
+    - name: Create output file
+      file: path="{{ output_file }}" state=touch mode="u=rw,g=r,o=r"
+      register: output
+    
+    - name: Save API Gateway Endpoint to output file
+      copy: content="{{ stack.stack_outputs }}" dest="{{ output.dest }}"

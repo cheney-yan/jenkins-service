@@ -1,0 +1,162 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Jenkins stack template.",
+  "Parameters" : {
+    "RolePath" : {
+      "Description" : "The role path",
+      "Type" : "String",
+      "Default" : "/jenkins/"
+    }
+  },
+  "Resources" : {
+    "JenkinsInstanceRole" : {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": { "Ref" : "RolePath" },
+        "Policies": [
+          {
+            "PolicyName": "LogRolePolicy",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:Create*",
+                    "logs:PutLogEvents",
+                    "s3:GetObject"
+                  ],
+                  "Resource": [
+                    "arn:aws:logs:*:*:*",
+                    "arn:aws:s3:::*"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "MonitorEC2HealthyAndMonitor",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "autoscaling:Describe*",
+                    "cloudwatch:PutMetricData"
+                  ],
+                  "Resource": [
+                    "*"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "JenkinsInstanceProfile" : {
+        "Type": "AWS::IAM::InstanceProfile",
+        "Properties": {
+            "Path": { "Ref" : "RolePath" },
+            "Roles": [{ "Ref" : "JenkinsInstanceRole" }]
+        }
+    },
+    "JenkinsProject1SlaveRole" : {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path":{ "Ref" : "RolePath" },
+        "Policies": [
+          {
+            "PolicyName": "CanDoLimitedThings",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:List*"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::*"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "ButSurelyCanAssumeToOtherRoles",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "iam:assume*"
+                  ],
+                  "Resource": [
+                    "*"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "JenkinsProject1SlaveProfile" : {
+        "Type": "AWS::IAM::InstanceProfile",
+        "Properties": {
+            "Path": { "Ref" : "RolePath" },
+            "Roles": [{ "Ref" : "JenkinsProject1SlaveRole" }]
+        }
+    }
+  },
+
+  "Outputs" : {
+    "JenkinsInstanceProfile": {
+      "Description": "The jenkins server instance role profile",
+      "Value": {
+        "Ref": "JenkinsInstanceProfile"
+      }
+    },
+    "JenkinsProject1SlaveProfile": {
+      "Description": "The jenkins Project for slave instance",
+      "Value": {
+        "Ref": "JenkinsProject1SlaveProfile"
+      }
+    }
+
+  }
+}

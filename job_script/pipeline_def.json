@@ -1,0 +1,108 @@
+{
+  "develop": {
+    "branches": [
+      "*/develop"
+    ],
+    "jobs": {
+      "10_unit_test": {
+        "script": "unit_test.sh",
+        "upper_stream": null,
+        "lint": true,
+        "coverage":true,
+        "junit_results":true,
+        "start_job":true
+      },
+      "20_bake_images": {
+        "script": "bake_images.sh",
+        "upper_stream": "10_unit_test",
+        "bypass_if_not_defined":true
+      },
+      "30_deploy_ci": {
+        "script": "deploy_ci.sh",
+        "upper_stream": "20_bake_images"
+      },
+      "40_ci_functional_test": {
+        "script": "ci_functional_test.sh",
+        "upper_stream": "30_deploy_ci",
+        "junit_results": true
+      },
+      "50_undeploy_ci": {
+        "script": "undeploy_ci.sh",
+        "upper_stream": "40_ci_functional_test",
+        "condition": "ALWAYS"
+      },
+      "60_deploy_dev": {
+        "script": "deploy_dev.sh",
+        "upper_stream": "40_ci_functional_test"
+      },
+      "70_promote_images": {
+        "script": "promote_images_qa_prod.sh",
+        "upper_stream": "40_ci_functional_test",
+        "bypass_if_not_defined":true
+      },
+      "80_deploy_qa": {
+        "script": "deploy_qa.sh",
+        "upper_stream": "70_promote_images"
+      }
+    }
+  },
+  "release": {
+    "branches": [
+      "*/master"
+    ],
+    "jobs": {
+      "10_unit_test": {
+        "script": "unit_test.sh",
+        "upper_stream": null,
+        "lint": true,
+        "junit_results":true,
+        "coverage":true,
+        "start_job":true
+      },
+      "15_bake_images": {
+        "script": "bake_images.sh",
+        "upper_stream": "10_unit_test",
+        "bypass_if_not_defined":true
+      },
+      "20_deploy_ci": {
+        "script": "deploy_ci.sh",
+        "upper_stream": "15_bake_images"
+      },
+      "30_ci_functional_test": {
+        "script": "ci_functional_test.sh",
+        "upper_stream": "20_deploy_ci",
+        "junit_results":true
+
+      },
+      "40_undeploy_ci": {
+        "script": "undeploy_ci.sh",
+        "upper_stream": "30_ci_functional_test",
+        "condition": "ALWAYS"
+      },
+      "50_deploy_preprod": {
+        "script": "deploy_preprod.sh",
+        "upper_stream": "30_ci_functional_test"
+      },
+      "60_deploy_prod": {
+        "script": "deploy_prod.sh"
+      }
+    }
+  },
+  "feature": {
+    "branches": [
+         ":.*/feature/.*",
+          ":.*/bugfix/.*"
+
+    ],
+    "jobs": {
+      "10_unit_test": {
+        "script": "unit_test.sh",
+        "upper_stream": null,
+        "junit_results":true,
+        "lint": true,
+        "coverage":true,
+        "start_job":true
+      }
+    }
+  }
+}

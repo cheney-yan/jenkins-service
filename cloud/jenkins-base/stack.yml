@@ -1,0 +1,36 @@
+--- # Playbook to manage the Authentication Cloud Stack 
+- name: The Jenkins base resource stack
+  hosts: localhost
+  connection: local
+  gather_facts: True
+  vars:
+    region: ap-southeast-2
+
+  tasks:
+    - name: Prepare running dir
+      local_action:
+        module: command mktemp -d "/tmp/jenkins.XXXX"
+      register: working_dir
+
+    - debug: msg="Generating cloudformation template at {{ working_dir.stdout }}/stack.json"
+
+    - name: Install customised cloudformation template
+      template: src=templates/stack.json dest={{ working_dir.stdout }}/stack.json
+
+    - name: Launch stack cloudformation
+      cloudformation:
+        stack_name: "{{ name }}-jenkins"
+        state: "{{ stack_state | default('present') }}"
+        region: "{{ region }}"
+        disable_rollback: false
+        template: "{{ working_dir.stdout }}/stack.json"
+        template_parameters:
+          RolePath: "/jenkins/"
+      register: stack
+
+    - name: Create output file
+      file: path="{{ output_file }}" state=touch mode="u=rw,g=r,o=r"
+      register: output
+    
+    - name: Save API Gateway Endpoint to output file
+      copy: content="{{ stack.stack_outputs }}" dest="{{ output.dest }}"
